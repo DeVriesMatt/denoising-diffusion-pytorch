@@ -6,6 +6,7 @@ from denoising_diffusion_pytorch.denoising_diffusion_pytorch import (
 from denoising_diffusion_pytorch.denoising_diffusion_pytorch_3D import (
     Unet3D,
     GaussianDiffusion3D,
+    Trainer3D,
 )
 
 

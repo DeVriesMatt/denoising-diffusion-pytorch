@@ -924,7 +924,7 @@ class Dataset(Dataset):
 # trainer class
 
 
-class Trainer(object):
+class Trainer3D(object):
     def __init__(
         self,
         diffusion_model,
@@ -1123,13 +1123,13 @@ if __name__ == "__main__":
         loss_type="l1",  # L1 or L2
     ).cuda()
 
-    trainer = Trainer(
+    trainer = Trainer3D(
         diffusion,
         train_batch_size=1,
         train_lr=8e-5,
         train_num_steps=700000,  # total training steps
         gradient_accumulate_every=2,  # gradient accumulation steps
         ema_decay=0.995,  # exponential moving average decay
-        amp=True  # turn on mixed precision
+        amp=True,  # turn on mixed precision
     )
     trainer.train()
