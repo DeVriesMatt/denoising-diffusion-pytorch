@@ -36,6 +36,14 @@ ModelPrediction = namedtuple("ModelPrediction", ["pred_noise", "pred_x_start"])
 # helpers functions
 
 
+def save_images(all_images, results_folder, milestone):
+    for i in range(all_images.shape[0]):
+        io.imsave(
+            str(results_folder / f"image{str(i).zfill(3)}_sample-{milestone}.tif"),
+            all_images[i],
+        )
+
+
 def exists(x):
     return x is not None
 
@@ -1101,11 +1109,16 @@ class Trainer3D(object):
                             )
 
                         all_images = torch.cat(all_images_list, dim=0)
-                        utils.save_image(
-                            all_images,
-                            str(self.results_folder / f"sample-{milestone}.png"),
-                            nrow=int(math.sqrt(self.num_samples)),
-                        )
+                        # utils.save_image(
+                        #     all_images,
+                        #     str(self.results_folder / f"sample-{milestone}.png"),
+                        #     nrow=int(math.sqrt(self.num_samples)),
+                        # )
+                        try:
+                            save_images(all_images, self.results_folder, milestone)
+                        except Exception as e:
+                            print(f"Cannot save images due to exception {e}")
+
                         self.save(milestone)
 
                 self.step += 1
