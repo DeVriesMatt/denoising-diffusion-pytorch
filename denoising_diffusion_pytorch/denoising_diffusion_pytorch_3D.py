@@ -27,6 +27,7 @@ import os
 from skimage import io
 import numpy as np
 import pandas as pd
+import tifffile
 
 # constants
 
@@ -38,9 +39,10 @@ ModelPrediction = namedtuple("ModelPrediction", ["pred_noise", "pred_x_start"])
 
 def save_images(all_images, results_folder, milestone):
     for i in range(all_images.shape[0]):
-        io.imsave(
+        tifffile.imwrite(
             str(results_folder / f"image{str(i).zfill(3)}_sample-{milestone}.tif"),
             all_images[i],
+            imagej=True,
         )
 
 
@@ -1117,7 +1119,7 @@ class Trainer3D(object):
                         try:
                             save_images(all_images, self.results_folder, milestone)
                         except Exception as e:
-                            print(f"Cannot save images due to exception {e}")
+                            print(f"Cannot save images due to exception {e}.")
 
                         self.save(milestone)
 
