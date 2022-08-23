@@ -884,7 +884,10 @@ class SingleCell(Dataset):
                 self.image_path, plate_num, nuc_component_path, serial_number + ".tif"
             )
             nuc_image = io.imread(nuc_path)
-            image = np.stack((cell_image, nuc_image))
+            try:
+                image = np.stack((cell_image, nuc_image))
+            except:
+                image = torch.ones((2, 64, 64, 64))
 
         if self.transforms:
             image = self.transforms(image)
