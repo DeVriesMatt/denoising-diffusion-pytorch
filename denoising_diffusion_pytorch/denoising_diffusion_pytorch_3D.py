@@ -1,5 +1,4 @@
 import math
-import copy
 from pathlib import Path
 from random import random
 from functools import partial
@@ -23,9 +22,16 @@ from ema_pytorch import EMA
 
 from accelerate import Accelerator
 
+import torchio as tio
+import os
+from skimage import io
+import numpy as np
+import pandas as pd
+
 # constants
 
 ModelPrediction = namedtuple("ModelPrediction", ["pred_noise", "pred_x_start"])
+
 
 # helpers functions
 
@@ -95,15 +101,15 @@ class Residual(nn.Module):
 def Upsample(dim, dim_out=None):
     return nn.Sequential(
         nn.Upsample(scale_factor=2, mode="nearest"),
-        nn.Conv2d(dim, default(dim_out, dim), 3, padding=1),
+        nn.Conv3d(dim, default(dim_out, dim), 3, padding=1),
     )
 
 
 def Downsample(dim, dim_out=None):
-    return nn.Conv2d(dim, default(dim_out, dim), 4, 2, 1)
+    return nn.Conv3d(dim, default(dim_out, dim), 4, 2, 1)
 
 
-class WeightStandardizedConv2d(nn.Conv2d):
+class WeightStandardizedConv3d(nn.Conv3d):
     """
     https://arxiv.org/abs/1903.10520
     weight standardization purportedly works synergistically with group normalization
@@ -113,11 +119,11 @@ class WeightStandardizedConv2d(nn.Conv2d):
         eps = 1e-5 if x.dtype == torch.float32 else 1e-3
 
         weight = self.weight
-        mean = reduce(weight, "o ... -> o 1 1 1", "mean")
-        var = reduce(weight, "o ... -> o 1 1 1", partial(torch.var, unbiased=False))
+        mean = reduce(weight, "o ... -> o 1 1 1 1", "mean")
+        var = reduce(weight, "o ... -> o 1 1 1 1", partial(torch.var, unbiased=False))
         normalized_weight = (weight - mean) * (var + eps).rsqrt()
 
-        return F.conv2d(
+        return F.conv3d(
             x,
             normalized_weight,
             self.bias,
@@ -131,7 +137,7 @@ class WeightStandardizedConv2d(nn.Conv2d):
 class LayerNorm(nn.Module):
     def __init__(self, dim):
         super().__init__()
-        self.g = nn.Parameter(torch.ones(1, dim, 1, 1))
+        self.g = nn.Parameter(torch.ones(1, dim, 1, 1, 1))
 
     def forward(self, x):
         eps = 1e-5 if x.dtype == torch.float32 else 1e-3
@@ -194,7 +200,7 @@ class LearnedSinusoidalPosEmb(nn.Module):
 class Block(nn.Module):
     def __init__(self, dim, dim_out, groups=8):
         super().__init__()
-        self.proj = WeightStandardizedConv2d(dim, dim_out, 3, padding=1)
+        self.proj = WeightStandardizedConv3d(dim, dim_out, 3, padding=1)
         self.norm = nn.GroupNorm(groups, dim_out)
         self.act = nn.SiLU()
 
@@ -221,14 +227,13 @@ class ResnetBlock(nn.Module):
 
         self.block1 = Block(dim, dim_out, groups=groups)
         self.block2 = Block(dim_out, dim_out, groups=groups)
-        self.res_conv = nn.Conv2d(dim, dim_out, 1) if dim != dim_out else nn.Identity()
+        self.res_conv = nn.Conv3d(dim, dim_out, 1) if dim != dim_out else nn.Identity()
 
     def forward(self, x, time_emb=None):
-
         scale_shift = None
         if exists(self.mlp) and exists(time_emb):
             time_emb = self.mlp(time_emb)
-            time_emb = rearrange(time_emb, "b c -> b c 1 1")
+            time_emb = rearrange(time_emb, "b c -> b c 1 1 1")
             scale_shift = time_emb.chunk(2, dim=1)
 
         h = self.block1(x, scale_shift=scale_shift)
@@ -244,15 +249,15 @@ class LinearAttention(nn.Module):
         self.scale = dim_head**-0.5
         self.heads = heads
         hidden_dim = dim_head * heads
-        self.to_qkv = nn.Conv2d(dim, hidden_dim * 3, 1, bias=False)
+        self.to_qkv = nn.Conv3d(dim, hidden_dim * 3, 1, bias=False)
 
-        self.to_out = nn.Sequential(nn.Conv2d(hidden_dim, dim, 1), LayerNorm(dim))
+        self.to_out = nn.Sequential(nn.Conv3d(hidden_dim, dim, 1), LayerNorm(dim))
 
     def forward(self, x):
-        b, c, h, w = x.shape
+        b, c, h, w, z = x.shape
         qkv = self.to_qkv(x).chunk(3, dim=1)
         q, k, v = map(
-            lambda t: rearrange(t, "b (h c) x y -> b h c (x y)", h=self.heads), qkv
+            lambda t: rearrange(t, "b (h c) x y z-> b h c (x y z)", h=self.heads), qkv
         )
 
         q = q.softmax(dim=-2)
@@ -264,7 +269,9 @@ class LinearAttention(nn.Module):
         context = torch.einsum("b h d n, b h e n -> b h d e", k, v)
 
         out = torch.einsum("b h d e, b h d n -> b h e n", context, q)
-        out = rearrange(out, "b h c (x y) -> b (h c) x y", h=self.heads, x=h, y=w)
+        out = rearrange(
+            out, "b h c (x y z) -> b (h c) x y z", h=self.heads, x=h, y=w, z=z
+        )
         return self.to_out(out)
 
 
@@ -274,14 +281,14 @@ class Attention(nn.Module):
         self.scale = scale
         self.heads = heads
         hidden_dim = dim_head * heads
-        self.to_qkv = nn.Conv2d(dim, hidden_dim * 3, 1, bias=False)
-        self.to_out = nn.Conv2d(hidden_dim, dim, 1)
+        self.to_qkv = nn.Conv3d(dim, hidden_dim * 3, 1, bias=False)
+        self.to_out = nn.Conv3d(hidden_dim, dim, 1)
 
     def forward(self, x):
-        b, c, h, w = x.shape
+        b, c, h, w, z = x.shape
         qkv = self.to_qkv(x).chunk(3, dim=1)
         q, k, v = map(
-            lambda t: rearrange(t, "b (h c) x y -> b h c (x y)", h=self.heads), qkv
+            lambda t: rearrange(t, "b (h c) x y z -> b h c (x y z)", h=self.heads), qkv
         )
 
         q, k = map(l2norm, (q, k))
@@ -289,14 +296,14 @@ class Attention(nn.Module):
         sim = einsum("b h d i, b h d j -> b h i j", q, k) * self.scale
         attn = sim.softmax(dim=-1)
         out = einsum("b h i j, b h d j -> b h i d", attn, v)
-        out = rearrange(out, "b h (x y) d -> b (h d) x y", x=h, y=w)
+        out = rearrange(out, "b h (x y z) d -> b (h d) x y z", x=h, y=w, z=z)
         return self.to_out(out)
 
 
 # model
 
 
-class Unet(nn.Module):
+class Unet3D(nn.Module):
     def __init__(
         self,
         dim,
@@ -319,7 +326,7 @@ class Unet(nn.Module):
         input_channels = channels * (2 if self_condition else 1)
 
         init_dim = default(init_dim, dim)
-        self.init_conv = nn.Conv2d(input_channels, init_dim, 7, padding=3)
+        self.init_conv = nn.Conv3d(input_channels, init_dim, 7, padding=3)
 
         dims = [init_dim, *map(lambda m: dim * m, dim_mults)]
         in_out = list(zip(dims[:-1], dims[1:]))
@@ -363,7 +370,7 @@ class Unet(nn.Module):
                         Residual(PreNorm(dim_in, LinearAttention(dim_in))),
                         Downsample(dim_in, dim_out)
                         if not is_last
-                        else nn.Conv2d(dim_in, dim_out, 3, padding=1),
+                        else nn.Conv3d(dim_in, dim_out, 3, padding=1),
                     ]
                 )
             )
@@ -384,7 +391,7 @@ class Unet(nn.Module):
                         Residual(PreNorm(dim_out, LinearAttention(dim_out))),
                         Upsample(dim_out, dim_in)
                         if not is_last
-                        else nn.Conv2d(dim_out, dim_in, 3, padding=1),
+                        else nn.Conv3d(dim_out, dim_in, 3, padding=1),
                     ]
                 )
             )
@@ -393,7 +400,7 @@ class Unet(nn.Module):
         self.out_dim = default(out_dim, default_out_dim)
 
         self.final_res_block = block_klass(dim * 2, dim, time_emb_dim=time_dim)
-        self.final_conv = nn.Conv2d(dim, self.out_dim, 1)
+        self.final_conv = nn.Conv3d(dim, self.out_dim, 1)
 
     def forward(self, x, time, x_self_cond=None):
         if self.self_condition:
@@ -466,7 +473,7 @@ def cosine_beta_schedule(timesteps, s=0.008):
     return torch.clip(betas, 0, 0.999)
 
 
-class GaussianDiffusion(nn.Module):
+class GaussianDiffusion3D(nn.Module):
     def __init__(
         self,
         model,
@@ -477,12 +484,15 @@ class GaussianDiffusion(nn.Module):
         loss_type="l1",
         objective="pred_noise",
         beta_schedule="cosine",
-        p2_loss_weight_gamma=0.0,  # p2 loss weight, from https://arxiv.org/abs/2204.00227 - 0 is equivalent to weight of 1 across time - 1. is recommended
+        p2_loss_weight_gamma=0.0,
+        # p2 loss weight, from https://arxiv.org/abs/2204.00227 - 0 is equivalent to weight of 1 across time - 1. is recommended
         p2_loss_weight_k=1,
         ddim_sampling_eta=1.0,
     ):
         super().__init__()
-        assert not (type(self) == GaussianDiffusion and model.channels != model.out_dim)
+        assert not (
+            type(self) == GaussianDiffusion3D and model.channels != model.out_dim
+        )
 
         self.model = model
         self.channels = self.model.channels
@@ -704,7 +714,7 @@ class GaussianDiffusion(nn.Module):
         sample_fn = (
             self.p_sample_loop if not self.is_ddim_sampling else self.ddim_sample
         )
-        return sample_fn((batch_size, channels, image_size, image_size))
+        return sample_fn((batch_size, channels, image_size, image_size, image_size))
 
     @torch.no_grad()
     def interpolate(self, x1, x2, t=None, lam=0.5):
@@ -744,7 +754,7 @@ class GaussianDiffusion(nn.Module):
             raise ValueError(f"invalid loss type {self.loss_type}")
 
     def p_losses(self, x_start, t, noise=None):
-        b, c, h, w = x_start.shape
+        b, c, h, w, d = x_start.shape
         noise = default(noise, lambda: torch.randn_like(x_start))
 
         # noise sample
@@ -779,13 +789,13 @@ class GaussianDiffusion(nn.Module):
         return loss.mean()
 
     def forward(self, img, *args, **kwargs):
-        b, c, h, w, device, img_size, = (
+        b, c, h, w, d, device, img_size, = (
             *img.shape,
             img.device,
             self.image_size,
         )
         assert (
-            h == img_size and w == img_size
+            h == img_size and w == img_size and d == img_size
         ), f"height and width of image must be {img_size}"
         t = torch.randint(0, self.num_timesteps, (b,), device=device).long()
 
@@ -794,6 +804,82 @@ class GaussianDiffusion(nn.Module):
 
 
 # dataset classes
+class SingleCell(Dataset):
+    def __init__(
+        self,
+        image_path,
+        dataframe_path,
+        transforms=None,
+        image_size=400,
+        cell_component="both",
+    ):
+        self.image_path = image_path
+        self.dataframe_path = dataframe_path
+        self.p = Path(self.image_path)
+        self.df = pd.read_csv(dataframe_path)
+        self.transforms = transforms
+        self.image_size = image_size
+        self.cell_component = cell_component
+        choices = ["cell", "nuc", "both"]
+        assert cell_component in choices, f"Please choose one of {choices}."
+
+        self.new_df = self.df[
+            (self.df.xDim <= self.image_size)
+            & (self.df.yDim <= self.image_size)
+            & (self.df.zDim <= self.image_size)
+        ].reset_index(drop=True)
+
+    def __len__(self):
+        return len(self.new_df)
+
+    def __getitem__(self, idx):
+        # read the image
+        treatment = self.new_df.loc[idx, "Treatment"]
+        plate_num = "Plate" + str(self.new_df.loc[idx, "PlateNumber"])
+        serial_number = self.new_df.loc[idx, "serialNumber"]
+        if self.cell_component == "cell":
+            component_path = "stacked_intensity_cell"
+            path = os.path.join(
+                self.image_path, plate_num, component_path, serial_number + ".tif"
+            )
+            image = io.imread(path)
+        elif self.cell_component == "nuc":
+            component_path = "stacked_intensity_nucleus"
+            path = os.path.join(
+                self.image_path, plate_num, component_path, serial_number + ".tif"
+            )
+            image = io.imread(path)
+        else:
+            cell_component_path = "stacked_intensity_cell"
+            try:
+                cell_path = os.path.join(
+                    self.image_path,
+                    plate_num,
+                    cell_component_path,
+                    serial_number + ".tif",
+                )
+                cell_image = io.imread(cell_path)
+            except:
+                serial_number = serial_number.swapcase()
+                cell_path = os.path.join(
+                    self.image_path,
+                    plate_num,
+                    cell_component_path,
+                    serial_number + ".tif",
+                )
+                cell_image = io.imread(cell_path)
+
+            nuc_component_path = "stacked_intensity_nucleus"
+            nuc_path = os.path.join(
+                self.image_path, plate_num, nuc_component_path, serial_number + ".tif"
+            )
+            nuc_image = io.imread(nuc_path)
+            image = np.stack((cell_image, nuc_image))
+
+        if self.transforms:
+            image = self.transforms(image)
+
+        return image
 
 
 class Dataset(Dataset):
@@ -842,8 +928,8 @@ class Trainer(object):
     def __init__(
         self,
         diffusion_model,
-        folder,
         *,
+        folder="/home/mvries/Documents/Datasets/OPM/SingleCellFromNathan_17122021/",
         train_batch_size=16,
         gradient_accumulate_every=1,
         augment_horizontal_flip=True,
@@ -859,6 +945,7 @@ class Trainer(object):
         fp16=False,
         split_batches=True,
         convert_image_to=None,
+        dataframe="all_data_removedwrong_ori_removedTwo.csv",
     ):
         super().__init__()
 
@@ -881,14 +968,25 @@ class Trainer(object):
 
         self.train_num_steps = train_num_steps
         self.image_size = diffusion_model.image_size
-
+        self.dataframe = folder + dataframe
         # dataset and dataloader
 
-        self.ds = Dataset(
-            folder,
-            self.image_size,
-            augment_horizontal_flip=augment_horizontal_flip,
-            convert_image_to=convert_image_to,
+        spatial_transforms = {
+            tio.RandomElasticDeformation(): 0.2,
+            tio.RandomAffine(): 0.8,
+        }
+
+        transform = tio.Compose(
+            [
+                tio.CropOrPad((self.image_size, self.image_size, self.image_size)),
+                tio.OneOf(spatial_transforms, p=0.5),
+                tio.RandomFlip(axes=["LR", "AP", "IS"]),
+                tio.RescaleIntensity(out_min_max=(0, 1)),
+            ]
+        )
+
+        self.ds = SingleCell(
+            image_path=folder, dataframe_path=self.dataframe, transforms=transform
         )
         dl = DataLoader(
             self.ds,
@@ -1014,3 +1112,24 @@ class Trainer(object):
                 pbar.update(1)
 
         accelerator.print("training complete")
+
+
+if __name__ == "__main__":
+    model = Unet3D(dim=64, channels=2).cuda()
+    diffusion = GaussianDiffusion3D(
+        model,
+        image_size=64,
+        timesteps=1000,  # number of steps
+        loss_type="l1",  # L1 or L2
+    ).cuda()
+
+    trainer = Trainer(
+        diffusion,
+        train_batch_size=1,
+        train_lr=8e-5,
+        train_num_steps=700000,  # total training steps
+        gradient_accumulate_every=2,  # gradient accumulation steps
+        ema_decay=0.995,  # exponential moving average decay
+        amp=True  # turn on mixed precision
+    )
+    trainer.train()
