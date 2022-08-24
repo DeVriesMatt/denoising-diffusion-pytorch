@@ -956,15 +956,16 @@ class Trainer3D(object):
         results_folder="./results",
         amp=False,
         fp16=False,
-        split_batches=True,
+        split_batches=False,
         convert_image_to=None,
         dataframe="all_data_removedwrong_ori_removedTwo.csv",
     ):
         super().__init__()
 
-        self.accelerator = Accelerator(
-            split_batches=split_batches, mixed_precision="fp16" if fp16 else "no"
-        )
+        # self.accelerator = Accelerator(
+            # split_batches=split_batches, mixed_precision="fp16" if fp16 else "no"
+        # )
+        self.accelerator = Accelerator()
 
         self.accelerator.native_amp = amp
 
