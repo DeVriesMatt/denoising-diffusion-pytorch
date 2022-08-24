@@ -1006,7 +1006,7 @@ class Trainer3D(object):
             batch_size=train_batch_size,
             shuffle=True,
             pin_memory=True,
-            num_workers=cpu_count(),
+            num_workers=4,
         )
 
         dl = self.accelerator.prepare(dl)
