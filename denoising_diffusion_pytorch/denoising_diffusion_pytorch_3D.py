@@ -41,7 +41,7 @@ def save_images(all_images, results_folder, milestone):
     for i in range(all_images.shape[0]):
         tifffile.imwrite(
             str(results_folder / f"image{str(i).zfill(3)}_sample-{milestone}.tif"),
-            all_images[i],
+            torch.squeeze(all_images[i]).detach().cpu().numpy(),
             imagej=True,
         )
 
