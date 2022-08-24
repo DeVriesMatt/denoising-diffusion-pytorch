@@ -952,7 +952,7 @@ class Trainer3D(object):
         ema_decay=0.995,
         adam_betas=(0.9, 0.99),
         save_and_sample_every=1000,
-        num_samples=25,
+        num_samples=3,
         results_folder="./results",
         amp=False,
         fp16=False,
@@ -995,6 +995,7 @@ class Trainer3D(object):
                 tio.OneOf(spatial_transforms, p=0.5),
                 tio.RandomFlip(axes=["LR", "AP", "IS"]),
                 tio.RescaleIntensity(out_min_max=(0, 1)),
+                T.ToTensor()
             ]
         )
 
@@ -1121,6 +1122,7 @@ class Trainer3D(object):
                         # )
                         try:
                             save_images(all_images, self.results_folder, milestone)
+                            print("Saving images")
                         except Exception as e:
                             print(f"Cannot save images due to exception {e}.")
 
