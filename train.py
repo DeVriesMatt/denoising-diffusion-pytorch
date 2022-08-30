@@ -4,7 +4,7 @@ from datetime import datetime
 import logging
 import torchio as tio
 import argparse
-from denoising_diffusion_pytorch import Trainer3D, Unet3D, GaussianDiffusion3D
+from denoising_diffusion_pytorch import Trainer, Unet, GaussianDiffusion
 
 
 def str2bool(v):
@@ -23,7 +23,7 @@ if __name__ == "__main__":
 
     parser.add_argument(
         "--dataset_path",
-        default="/home/mvries/Documents/Datasets/OPM/SingleCellFromNathan_17122021/",
+        default="/run/user/1128299809/gvfs/smb-share:server=rds.icr.ac.uk,share=data/DBI/DUDBI/DYNCESYS/mvries/Kaggle/hpa-single-cell-image-classification",
         type=str,
         help="Please provide the path to the dataset of 3D tif images",
     )
@@ -36,7 +36,7 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--output_dir",
-        default="/home/mvries/Documents/CVAEOutput/",
+        default="/home/mvries/Documents/DiffusionHPA/",
         type=str,
         help="Please provide the path for where to save output.",
     )
@@ -48,7 +48,7 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--batch_size",
-        default=2,
+        default=64,
         type=int,
         help="Please provide the batch size.",
     )
@@ -73,21 +73,21 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--image_size",
-        default=64,
+        default=244,
         type=int,
         help="Input image size.",
     )
     args = parser.parse_args()
 
-    model = Unet3D(dim=64, channels=2).cuda()
-    diffusion = GaussianDiffusion3D(
+    model = Unet(dim=64, channels=3).cuda()
+    diffusion = GaussianDiffusion(
         model,
         image_size=args.image_size,
         timesteps=1000,  # number of steps
         loss_type="l1",  # L1 or L2
     ).cuda()
 
-    trainer = Trainer3D(
+    trainer = Trainer(
         diffusion,
         folder=args.dataset_path,
         train_batch_size=args.batch_size,

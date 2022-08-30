@@ -20,6 +20,8 @@ from einops.layers.torch import Rearrange
 from PIL import Image
 from tqdm.auto import tqdm
 from ema_pytorch import EMA
+import numpy as np
+import pandas as pd
 
 from accelerate import Accelerator
 
@@ -834,6 +836,88 @@ class Dataset(Dataset):
         img = Image.open(path)
         return self.transform(img)
 
+class HPADataset(torch.utils.data.Dataset):
+    def __init__(
+        self,
+        folder,
+        image_size,
+        exts=["jpg", "jpeg", "png"],
+        augment_horizontal_flip=False,
+        convert_image_to=None,
+    ):
+        super().__init__()
+        self.folder = folder
+        self.image_size = image_size
+        self.dataframe = pd.read_csv(folder + "/train.csv")
+        maybe_convert_fn = (
+            partial(convert_image_to, convert_image_to)
+            if exists(convert_image_to)
+            else nn.Identity()
+        )
+
+        self.transform = T.Compose(
+            [
+                T.Lambda(maybe_convert_fn),
+                T.Resize(image_size),
+                T.RandomHorizontalFlip() if augment_horizontal_flip else nn.Identity(),
+                T.CenterCrop(image_size),
+                T.ToTensor(),
+                T.Normalize(mean=[0.485, 0.456, 0.406],
+                                     std=[0.229, 0.224, 0.225]),
+            ]
+        )
+        self.channels = ['red', 'green', 'blue', 'yellow']
+
+    def get_images(self, id, root_path, channels):
+        images = list()
+        for channel in channels:
+            path = root_path + '/train/{}_{}.png'.format(id, channel)
+            image = Image.open(path)
+            images.append(image)
+        return images
+
+    def __len__(self):
+        return len(self.dataframe)
+
+    def __getitem__(self, index):
+        id = self.dataframe.iloc[index, 0]
+        images = self.get_images(id, self.folder, self.channels)
+
+        size = np.shape(images[0])[0]
+        zeros = np.zeros((size, size))
+
+        # Create arrays for each image with 3 channels
+        red_array = np.stack((images[0], zeros, zeros), 2)
+        green_array = np.stack((zeros, images[1], zeros), 2)
+        blue_array = np.stack((zeros, zeros, images[2]), 2)
+        # Place yellow across both red and green channels
+        yellow_array = np.stack((images[3], images[3], zeros), 2)
+
+        # Convert to image
+        red_image = Image.fromarray(np.uint8(red_array))
+        green_image = Image.fromarray(np.uint8(green_array))
+        blue_image = Image.fromarray(np.uint8(blue_array))
+        yellow_image = Image.fromarray(np.uint8(yellow_array))
+
+        # Copy over yellow into red and blue taking the max value of each pixel between the two
+        # Red / Yellow
+        red_yellow_array = np.maximum(red_array, yellow_array)
+        red_yellow_image = Image.fromarray(np.uint8(red_yellow_array))
+
+        # Green / Yellow
+        green_yellow_array = np.maximum(green_array, yellow_array)
+        green_yellow_image = Image.fromarray(np.uint8(green_yellow_array))
+
+        # Final solution to blend RGBY into RGB
+        blended_array = np.stack((
+            np.maximum(images[0], images[3]),
+            np.maximum(images[1], images[3]),
+            images[2]
+        ), 2)
+
+        blended_image = Image.fromarray(np.uint8(blended_array))
+
+        return self.transform(blended_image)
 
 # trainer class
 
@@ -884,9 +968,9 @@ class Trainer(object):
 
         # dataset and dataloader
 
-        self.ds = Dataset(
-            folder,
-            self.image_size,
+        self.ds = HPADataset(
+            folder=folder,
+            image_size=self.image_size,
             augment_horizontal_flip=augment_horizontal_flip,
             convert_image_to=convert_image_to,
         )
