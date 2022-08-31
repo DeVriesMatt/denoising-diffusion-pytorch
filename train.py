@@ -48,7 +48,7 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--batch_size",
-        default=64,
+        default=16,
         type=int,
         help="Please provide the batch size.",
     )
@@ -73,7 +73,7 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--image_size",
-        default=244,
+        default=128,
         type=int,
         help="Input image size.",
     )
