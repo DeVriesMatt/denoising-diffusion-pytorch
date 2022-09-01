@@ -884,27 +884,27 @@ class HPADataset(torch.utils.data.Dataset):
         size = np.shape(images[0])[0]
         zeros = np.zeros((size, size))
 
-        # Create arrays for each image with 3 channels
-        red_array = np.stack((images[0], zeros, zeros), 2)
-        green_array = np.stack((zeros, images[1], zeros), 2)
-        blue_array = np.stack((zeros, zeros, images[2]), 2)
-        # Place yellow across both red and green channels
-        yellow_array = np.stack((images[3], images[3], zeros), 2)
-
-        # Convert to image
-        red_image = Image.fromarray(np.uint8(red_array))
-        green_image = Image.fromarray(np.uint8(green_array))
-        blue_image = Image.fromarray(np.uint8(blue_array))
-        yellow_image = Image.fromarray(np.uint8(yellow_array))
-
-        # Copy over yellow into red and blue taking the max value of each pixel between the two
-        # Red / Yellow
-        red_yellow_array = np.maximum(red_array, yellow_array)
-        red_yellow_image = Image.fromarray(np.uint8(red_yellow_array))
-
-        # Green / Yellow
-        green_yellow_array = np.maximum(green_array, yellow_array)
-        green_yellow_image = Image.fromarray(np.uint8(green_yellow_array))
+        # # Create arrays for each image with 3 channels
+        # red_array = np.stack((images[0], zeros, zeros), 2)
+        # green_array = np.stack((zeros, images[1], zeros), 2)
+        # blue_array = np.stack((zeros, zeros, images[2]), 2)
+        # # Place yellow across both red and green channels
+        # yellow_array = np.stack((images[3], images[3], zeros), 2)
+        #
+        # # Convert to image
+        # red_image = Image.fromarray(np.uint8(red_array))
+        # green_image = Image.fromarray(np.uint8(green_array))
+        # blue_image = Image.fromarray(np.uint8(blue_array))
+        # yellow_image = Image.fromarray(np.uint8(yellow_array))
+        #
+        # # Copy over yellow into red and blue taking the max value of each pixel between the two
+        # # Red / Yellow
+        # red_yellow_array = np.maximum(red_array, yellow_array)
+        # red_yellow_image = Image.fromarray(np.uint8(red_yellow_array))
+        #
+        # # Green / Yellow
+        # green_yellow_array = np.maximum(green_array, yellow_array)
+        # green_yellow_image = Image.fromarray(np.uint8(green_yellow_array))
 
         # Final solution to blend RGBY into RGB
         blended_array = np.stack((
