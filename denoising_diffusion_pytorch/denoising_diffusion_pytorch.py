@@ -862,8 +862,6 @@ class HPADataset(torch.utils.data.Dataset):
                 T.RandomHorizontalFlip() if augment_horizontal_flip else nn.Identity(),
                 T.CenterCrop(image_size),
                 T.ToTensor(),
-                T.Normalize(mean=[0.485, 0.456, 0.406],
-                                     std=[0.229, 0.224, 0.225]),
             ]
         )
         self.channels = ['red', 'green', 'blue', 'yellow']
